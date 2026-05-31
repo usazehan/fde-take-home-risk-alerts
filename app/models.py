@@ -35,9 +35,6 @@ class RiskAlert(BaseModel):
 
     details_url: str
     
-    # DB uniqueness component: (account_id, month, alert_type)
-    alert_type: AlertType = "at_risk"
-    
 class AlertOutcome(BaseModel):
     account_id: str
     account_name: str
@@ -71,5 +68,4 @@ class RunResultResponse(BaseModel):
 
 class PreviewResponse(BaseModel):
     month: date
-    duplicate_rows: int = 0
     alerts: list[RiskAlert] = Field(default_factory=list)

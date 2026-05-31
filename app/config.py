@@ -10,10 +10,12 @@ DEFAULT_REGION_CHANNELS = {
     "APAC": "apac-risk-alerts",
 }
 
+DEFAULT_ARR_THRESHOLD = 25_000
+
 
 @dataclass(frozen=True)
 class AppConfig:
-    arr_threshold: int = 100_000
+    arr_threshold: int = DEFAULT_ARR_THRESHOLD
     sqlite_db_path: str = "risk_alerts.db"
     details_base_url: str = "https://app.quadsci.ai"
 
@@ -42,7 +44,7 @@ def _get_int_env(name: str, default: int) -> int:
 @lru_cache
 def get_config() -> AppConfig:
     return AppConfig(
-        arr_threshold=_get_int_env("ARR_THRESHOLD", 100_000),
+        arr_threshold=_get_int_env("ARR_THRESHOLD", DEFAULT_ARR_THRESHOLD),
         sqlite_db_path=os.getenv("SQLITE_DB_PATH", "risk_alerts.db"),
         details_base_url=os.getenv("DETAILS_BASE_URL", "https://app.quadsci.ai"),
         slack_webhook_base_url=os.getenv("SLACK_WEBHOOK_BASE_URL"),
