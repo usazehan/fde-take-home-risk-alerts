@@ -73,7 +73,6 @@ def compute_alerts(
             continue
 
         duration, risk_start = _duration_and_start(
-            account_id=account_id,
             target_month=target_month,
             status_by_month=status_by_account[account_id],
         )

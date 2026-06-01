@@ -10,14 +10,16 @@ DEFAULT_REGION_CHANNELS = {
     "APAC": "apac-risk-alerts",
 }
 
-DEFAULT_ARR_THRESHOLD = 25_000
+DEFAULT_ARR_THRESHOLD = 25000
+DEFAULT_DB_PATH = "risk_alerts.db"
+DEFAULT_DETAILS_BASE_URL = "https://app.yourcompany.com"
 
 
 @dataclass(frozen=True)
 class AppConfig:
     arr_threshold: int = DEFAULT_ARR_THRESHOLD
-    sqlite_db_path: str = "risk_alerts.db"
-    details_base_url: str = "https://app.quadsci.ai"
+    sqlite_db_path: str = DEFAULT_DB_PATH
+    details_base_url: str = DEFAULT_DETAILS_BASE_URL
 
     slack_webhook_base_url: Optional[str] = None
     slack_webhook_url: Optional[str] = None
@@ -45,8 +47,8 @@ def _get_int_env(name: str, default: int) -> int:
 def get_config() -> AppConfig:
     return AppConfig(
         arr_threshold=_get_int_env("ARR_THRESHOLD", DEFAULT_ARR_THRESHOLD),
-        sqlite_db_path=os.getenv("SQLITE_DB_PATH", "risk_alerts.db"),
-        details_base_url=os.getenv("DETAILS_BASE_URL", "https://app.quadsci.ai"),
+        sqlite_db_path=os.getenv("SQLITE_DB_PATH", DEFAULT_DB_PATH),
+        details_base_url=os.getenv("DETAILS_BASE_URL", DEFAULT_DETAILS_BASE_URL),
         slack_webhook_base_url=os.getenv("SLACK_WEBHOOK_BASE_URL"),
         slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL"),
     )

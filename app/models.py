@@ -68,4 +68,5 @@ class RunResultResponse(BaseModel):
 
 class PreviewResponse(BaseModel):
     month: date
+    duplicate_rows: int = 0
     alerts: list[RiskAlert] = Field(default_factory=list)

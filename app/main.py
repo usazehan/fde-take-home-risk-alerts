@@ -1,16 +1,15 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from .config import get_config
+from .models import HealthResponse, PreviewResponse, RunRequest
+from .risk_logic import compute_alerts
+
 app = FastAPI(title="Risk Alert Service")
 
-class RunRequest(BaseModel):
-    source_uri: str
-    month: str  # YYYY-MM-01
-    dry_run: bool = False
-
-@app.get("/health")
-def health():
-    return {"ok": True}
+@app.get("/health", response_model=HealthResponse)
+def health() -> HealthResponse:
+    return HealthResponse()
 
 @app.post("/runs")
 def create_run(req: RunRequest):
@@ -26,7 +25,16 @@ def get_run(run_id: str):
     # TODO: return run status + counts + samples
     return {"run_id": run_id, "status": "TODO"}
 
-@app.post("/preview")
-def preview(req: RunRequest):
-    # TODO: compute alerts but do not send
-    return {"alerts": [], "month": req.month}
+@app.post("/preview", response_model=PreviewResponse)
+def preview(req: RunRequest) -> PreviewResponse:
+    result = compute_alerts(
+        source_uri=req.source_uri,
+        target_month=req.month,
+        config=get_config(),
+    )
+    
+    return PreviewResponse(
+        month=req.month,
+        duplicate_rows=result.duplicate_rows,
+        alerts=result.alerts,
+    )
