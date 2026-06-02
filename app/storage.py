@@ -80,10 +80,15 @@ def _resolve_source(source_uri: str) -> ParquetSource:
 
     if scheme == "gs":
         return _resolve_gcs_source(source_uri, parsed)
+    
+    if scheme == "s3":
+        raise StorageError(
+            "s3:// is recognized but not implemented"
+    )
 
     raise StorageError(
         f"Unsupported source_uri scheme: {scheme!r}. "
-        "Supported schemes are file://, gs://, or a bare local path."
+        "Supported schemes are file://, gs://, or a bare local path"
     )
 
 
