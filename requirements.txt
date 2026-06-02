@@ -6,3 +6,4 @@ pyarrow>=14.0
 pandas>=2.1
 google-cloud-storage>=2.14
 sqlalchemy>=2.0
+pytest>=7.4

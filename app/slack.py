@@ -124,7 +124,8 @@ def build_slack_payload(alert: RiskAlert) -> dict[str, Any]:
     parts = [
         f"🚩 At Risk: {alert.account_name} ({alert.account_id})",
         f"Region: {_display(alert.account_region)}",
-        f"At Risk for: {alert.duration_months} month(s) since {alert.risk_start_month.isoformat()}",
+        f"At Risk for: {alert.duration_months} {_month_label(alert.duration_months)} "
+            f"(since {alert.risk_start_month.isoformat()})",
         f"ARR: {_format_arr(alert.arr)}",
         f"Renewal date: {_format_date(alert.renewal_date)}",
     ]
@@ -159,14 +160,14 @@ def _backoff(attempt: int, base: float, retry_after: Optional[str]) -> float:
             pass
     return base * (2 ** attempt)
 
+def _month_label(duration_months: int) -> str:
+    return "month" if duration_months == 1 else "months"
 
 def _format_arr(arr: Optional[int]) -> str:
     return f"${arr:,.0f}" if arr is not None else "Unknown"
 
-
 def _format_date(value: Optional[date]) -> str:
     return value.isoformat() if value is not None else "Unknown"
-
 
 def _display(value: Optional[str]) -> str:
     if value is None or value.strip() == "":
