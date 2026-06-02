@@ -1,157 +1,128 @@
-# FDE Take-Home: Risk Alert Service
+# Monthly Account Risk Alerts
 
-FastAPI batch service for generating and delivering At Risk account alerts from monthly account-status Parquet data.
+A FastAPI service that reads monthly account-status Parquet data, finds accounts
+that are currently **At Risk**, computes how long each has been continuously at
+risk, and posts region-routed alerts to Slack. Runs are persisted in SQLite so
+re-running the same month is idempotent (no duplicate alerts).
 
-The service reads account history from `file://` or `gs://`, deduplicates account/month records, computes continuous At Risk duration, routes alerts to Slack by region, and persists run/outcome state in SQLite for replay safety.
+## Endpoints
 
-## Features
-
-* `GET /health` health check
-* `POST /preview` computes alerts without sending Slack
-* `POST /runs` runs the alert batch and sends Slack notifications
-* `GET /runs/{run_id}` returns persisted run results
-* Reads local Parquet files and GCS Parquet files
-* Uses PyArrow column projection and filtered scans
-* Deduplicates `(account_id, month)` using latest `updated_at`
-* Computes continuous At Risk duration month by month
-* Routes alerts by region
-* Retries Slack 429 and 5xx responses
-* Records failed deliveries without aborting the entire run
-* Enforces replay safety with SQLite uniqueness on `(account_id, month, alert_type)`
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Health check |
+| `POST` | `/preview` | Compute alerts for a month;no Slack, no persistence |
+| `POST` | `/runs` | Execute a run synchronously, send Slack, persist outcomes, return a `run_id` |
+| `GET` | `/runs/{run_id}` | Persisted run status, counts, and sample alerts/errors |
 
 ## Project structure
 
 ```text
 app/
-  main.py          FastAPI routes and startup lifecycle
-  config.py        Environment-driven configuration
-  models.py        API/domain Pydantic models
-  storage.py       file://, gs://, and s3:// storage abstraction
-  risk_logic.py    Deduplication, filtering, and duration calculation
-  db.py            SQLite persistence and replay safety
-  slack.py         Slack payload formatting and delivery
-  support.py       Support notification stub for unknown-region accounts
-  run_service.py   Batch orchestration layer
-
-tests/
+  main.py          FastAPI routes and startup/shutdown
+  config.py        Env configuration
+  models.py        API/domain models
+  storage.py       Parquet access (file:// and gs://)
+  risk_logic.py    Dedup, ARR filtering, continuous-at-risk duration
+  db.py            SQLite persistence + replay safety
+  slack.py         Slack payload formatting + delivery with retries and backoffs
+  support.py       Aggregated notification stub
+  run_service.py   Run orchestrator
+tests/             Unit tests for each module
 ```
 
-## Requirements
+## Setup
 
-Python 3.11 is recommended.
-
-Install dependencies:
+Python 3.11 recommended.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-
 pip install -r requirements.txt
 ```
 
 ## Configuration
 
-The service is configured through environment variables.
+All configuration is via environment variables.
 
-| Variable                 |                       Default | Description                                                 |
-| ------------------------ | ----------------------------: | ----------------------------------------------------------- |
-| `ARR_THRESHOLD`          |                       `25000` | Minimum ARR for alerting when ARR is present                |
-| `SQLITE_DB_PATH`         |              `risk_alerts.db` | SQLite database path                                        |
-| `DETAILS_BASE_URL`       | `https://app.yourcompany.com` | Base URL used to build account details links                |
-| `SLACK_WEBHOOK_BASE_URL` |                         unset | Local/mock Slack base URL. Posts to `{base}/{channel}`      |
-| `SLACK_WEBHOOK_URL`      |                         unset | Slack incoming webhook URL                                  |
-| `SUPPORT_EMAIL`          |          `support@quadsci.ai` | Intended recipient for unknown-region support notifications |
+| Variable | Default | Description |
+| --- | --- | --- |
+| `ARR_THRESHOLD` | `25000` | Minimum ARR to alert on, when ARR is present (see note below) |
+| `SQLITE_DB_PATH` | `risk_alerts.db` | SQLite file path |
+| `DETAILS_BASE_URL` | `https://app.yourcompany.com` | Base URL for account detail links in alerts |
+| `SLACK_WEBHOOK_BASE_URL` | unset | Base URL for per-channel posting; posts to `{base}/{channel}` |
+| `SLACK_WEBHOOK_URL` | unset | Single Slack incoming webhook (used only if the base URL is unset) |
 
-Slack URL precedence:
-
-```text
-SLACK_WEBHOOK_BASE_URL wins over SLACK_WEBHOOK_URL
-```
-
-For local mock Slack:
+`SLACK_WEBHOOK_BASE_URL` takes precedence over `SLACK_WEBHOOK_URL`. For the local
+mock Slack server, set the base URL so alerts route per channel:
 
 ```bash
 export SLACK_WEBHOOK_BASE_URL=http://localhost:9000/slack/webhook
 ```
 
-This sends alerts to URLs like:
+Alerts then post to `…/amer-risk-alerts`, `…/emea-risk-alerts`, `…/apac-risk-alerts`.
 
-```text
-http://localhost:9000/slack/webhook/amer-risk-alerts
-http://localhost:9000/slack/webhook/emea-risk-alerts
-http://localhost:9000/slack/webhook/apac-risk-alerts
-```
+The support-notification recipient (`support@quadsci.ai`) is defined in
+`app/support.py`; it is not currently an environment variable.
 
-## ARR threshold behavior
+### ARR threshold behavior
 
-`ARR_THRESHOLD` defaults to `25000`.
+The threshold is applied **only when ARR is present**. A missing ARR (`null`) is
+treated as unknown, not as low ARR, so accounts with incomplete data are not
+silently dropped:
 
-The threshold is only applied when ARR is present:
+- `arr = 50000` → included (≥ 25000)
+- `arr = 10000` → filtered out (< 25000)
+- `arr = null` → included
 
-```text
-ARR = 50000  -> included if threshold is 25000
-ARR = 10000  -> filtered out
-ARR = null   -> included
-```
+The default of `25000` was chosen against the provided dataset: the maximum ARR
+in the data is just under `100000`, so the original placeholder default of
+`100000` would have produced zero alerts. `25000` surfaces a meaningful set of
+at-risk accounts while still filtering the lowest-value ones.
 
-A missing ARR is treated as unknown, not as low ARR. This avoids silently dropping accounts with incomplete data.
+### Region routing
 
-## Region routing
-
-Alerts are routed by `account_region`:
-
-| Region | Slack channel      |
-| ------ | ------------------ |
+| `account_region` | Slack channel |
+| --- | --- |
 | `AMER` | `amer-risk-alerts` |
 | `EMEA` | `emea-risk-alerts` |
 | `APAC` | `apac-risk-alerts` |
 
-If `account_region` is missing or unknown:
-
-* no Slack message is sent
-* the alert outcome is recorded as `failed`
-* the error is recorded as `unknown_region`
-* the account is included in a single aggregated support notification
-
-For this app, `support.py` logs the support notification instead of sending real email. In prod, this could be backed by SES, SMTP, or a customer notification service.
+If `account_region` is missing or unknown, the account is **not** sent to Slack.
+Instead the outcome is recorded as `failed` with error `unknown_region`, and the
+account is included in a single aggregated support notification at the end of the
+run. For this exercise `support.py` logs that notification; in production the same
+function would send via SES, SMTP, or an internal notification service.
 
 ## Running locally
 
-Start the API:
+Start the mock Slack server (see `mock_slack/`), then:
 
 ```bash
+export SLACK_WEBHOOK_BASE_URL=http://localhost:9000/slack/webhook
 uvicorn app.main:app --reload --port 8000
 ```
 
-Health check:
+The engine and tables are created once at startup (idempotent `CREATE TABLE IF
+NOT EXISTS`), and the connection pool is disposed on shutdown.
+
+### Health
 
 ```bash
 curl http://localhost:8000/health
+# {"ok": true}
 ```
 
-Expected response:
-
-```json
-{
-  "ok": true
-}
-```
-
-## Preview alerts
-
-`POST /preview` computes alerts but does not send Slack and does not write delivery outcomes.
+### Preview (no Slack, no persistence)
 
 ```bash
+PARQUET="file://$(pwd)/monthly_account_status.parquet"
+
 curl -X POST http://localhost:8000/preview \
   -H "Content-Type: application/json" \
-  -d '{
-    "source_uri": "file:///absolute/path/to/monthly_account_status.parquet",
-    "month": "2026-01-01",
-    "dry_run": true
-  }'
+  -d "{\"source_uri\": \"$PARQUET\", \"month\": \"2026-01-01\", \"dry_run\": true}"
 ```
 
-Example response:
+Example response (truncated to one alert):
 
 ```json
 {
@@ -175,57 +146,39 @@ Example response:
 }
 ```
 
-## Run the batch
-
-`POST /runs` computes alerts, sends Slack messages, persists outcomes, and returns a `run_id`.
+### Run the batch
 
 ```bash
+PARQUET="file://$(pwd)/monthly_account_status.parquet"
+
 curl -X POST http://localhost:8000/runs \
   -H "Content-Type: application/json" \
-  -d '{
-    "source_uri": "file:///absolute/path/to/monthly_account_status.parquet",
-    "month": "2026-01-01",
-    "dry_run": false
-  }'
+  -d "{\"source_uri\": \"$PARQUET\", \"month\": \"2026-01-01\", \"dry_run\": false}"
+# {"run_id": "3df0a8d6-5c1f-4e2e-bf25-8d6c7f0e3f41"}
 ```
 
-Example response:
+A dry run (`"dry_run": true`) computes alerts and records a run row, but sends no
+Slack and writes no `sent` outcomes — so it never affects replay safety.
 
-```json
-{
-  "run_id": "3df0a8d6-5c1f-4e2e-bf25-8d6c7f0e3f41"
-}
-```
-
-Dry-run behavior for `/runs`:
-
-```text
-dry_run=true
-  - computes alerts
-  - creates/completes a run row
-  - does not send Slack
-  - does not write sent alert outcomes
-  - does not affect replay safety
-```
-
-## Get run result
+### Get a run result
 
 ```bash
-curl http://localhost:8000/runs/{run_id}
+curl http://localhost:8000/runs/3df0a8d6-5c1f-4e2e-bf25-8d6c7f0e3f41
 ```
 
-Example response:
+Example response (samples truncated):
 
 ```json
 {
   "run_id": "3df0a8d6-5c1f-4e2e-bf25-8d6c7f0e3f41",
   "status": "succeeded",
+  "month": "2026-01-01",
   "counts": {
-    "rows_scanned": 8308,
-    "alerts_sent": 92,
+    "rows_scanned": 10587,
+    "duplicate_rows": 308,
+    "alerts_sent": 107,
     "skipped_replay": 0,
-    "failed_deliveries": 3,
-    "duplicate_rows": 308
+    "failed_deliveries": 3
   },
   "sample_alerts": [
     {
@@ -258,55 +211,28 @@ Example response:
 }
 ```
 
+The `110` total alerts for `2026-01-01` split into `107` routable (sent) and `3`
+unknown-region (recorded `failed`, reported to support). Re-running the same month
+returns `skipped_replay: 107` and sends nothing.
+
 ## Replay safety
 
-SQLite stores alert outcomes in `alert_outcomes`.
+`alert_outcomes` enforces uniqueness on `(account_id, month, alert_type)` (current
+alert type is `at_risk`). On a re-run:
 
-The table enforces uniqueness on:
+- **Already sent** → Slack is not called again, `skipped_replay` is incremented, and
+  the original `sent` row is preserved (the upsert refuses to overwrite a `sent` row).
+- **Previously failed** → the alert is retried, and the row can be overwritten by a
+  later `sent` or `failed` outcome.
+- **No prior outcome** → a new outcome is inserted.
 
-```text
-(account_id, month, alert_type)
-```
-
-Current alert type:
-
-```text
-at_risk
-```
-
-Replay behavior:
-
-```text
-Previously sent outcome:
-  - Slack is not sent again
-  - run count skipped_replay is incremented
-  - original sent row is preserved
-
-Previously failed outcome:
-  - retry is allowed
-  - row can be overwritten by a later sent or failed outcome
-
-No previous outcome:
-  - insert new outcome
-```
-
-This prevents duplicate Slack alerts while still allowing retry of failed deliveries.
+The run lifecycle is two-phase: a `running` row is inserted first (so outcomes can
+reference it via foreign key), then the run is marked `succeeded` or `failed` with
+final counts. A per-alert Slack failure is recorded as a failed delivery and does
+**not** fail the run; only an unprocessable run (e.g. unreadable Parquet) is marked
+`failed` and surfaced as an API error.
 
 ## Slack alert format
-
-Each Slack alert includes:
-
-```text
-🚩 At Risk: {account_name} ({account_id})
-Region: {account_region}
-At Risk for: X months (since YYYY-MM-01)
-ARR: {arr or Unknown}
-Renewal date: {renewal_date or Unknown}
-Owner: {account_owner, if present}
-Details URL: {DETAILS_BASE_URL}/accounts/{account_id}
-```
-
-Example:
 
 ```text
 🚩 At Risk: Account 0702 (a00702)
@@ -314,77 +240,30 @@ Region: EMEA
 At Risk for: 8 months (since 2025-06-01)
 ARR: $53,557
 Renewal date: 2026-02-01
+Owner: <only shown when present>
 Details URL: https://app.yourcompany.com/accounts/a00702
 ```
 
-## Storage support
+Delivery retries on HTTP `429` and `5xx` with exponential backoff, honoring the
+`Retry-After` header when present. Non-retryable `4xx` responses fail immediately.
 
-Supported:
+## Storage and scale
 
-```text
-file://...
-gs://bucket/path/file.parquet
-```
+Parquet is read through the PyArrow Dataset API with column projection and a row
+filter pushed down to the scan — only `month <= target_month` and only the columns
+needed for alert computation are materialized, so the full file is never loaded
+into memory unnecessarily. Local (`file://`) and GCS (`gs://`) sources are
+supported.
 
-Recognized extension point:
-
-```text
-s3://bucket/path/file.parquet
-```
-
-S3 is intentionally recognized by the storage abstraction but not implemented for this exercise.
-
-### GCS authentication
-
-GCS access uses ambient Google credentials through PyArrow/GCS support.
-
-For local development:
+GCS uses ambient Google credentials (Application Default Credentials):
 
 ```bash
 gcloud auth application-default login
-```
-
-Or set:
-
-```bash
+# or
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 ```
 
-No credentials should be placed in `source_uri`.
-
-## Scale awareness
-
-The Parquet file may be large, so the service avoids loading unnecessary data.
-
-The storage/risk logic uses:
-
-* PyArrow Dataset API
-* column projection
-* filtered scans
-* narrow column lists
-* deduplication after scanning only needed rows
-
-The risk logic scans only rows with:
-
-```text
-month <= target_month
-```
-
-and only the columns needed for alert computation:
-
-```text
-account_id
-account_name
-account_region
-month
-status
-renewal_date
-account_owner
-arr
-updated_at
-```
-
-The service materializes the filtered Arrow table into Python rows only after projection/filtering.
+Credentials are never placed in `source_uri`.
 
 ## Architecture
 
@@ -393,7 +272,6 @@ sequenceDiagram
     participant Client
     participant API as FastAPI
     participant Service as RunService
-    participant Storage as PyArrow Storage
     participant Risk as Risk Logic
     participant DB as SQLite
     participant Slack
@@ -401,79 +279,48 @@ sequenceDiagram
 
     Client->>API: POST /runs
     API->>Service: create_run(request)
-    Service->>DB: create_run(status=running)
-    Service->>Storage: read projected/filtered Parquet rows
-    Storage-->>Risk: account history rows
-    Risk-->>Service: computed RiskAlert list
+    Service->>DB: create_run (status=running)
+    Service->>Risk: compute_alerts (projected + filtered scan)
+    Risk-->>Service: RiskAlert list + counts
     loop each alert
-        Service->>DB: check existing outcome
+        Service->>DB: was_already_sent?
         alt already sent
             Service->>Service: skipped_replay += 1
         else unknown region
-            Service->>DB: record failed unknown_region
-        else send Slack
-            Service->>Slack: POST alert
-            Slack-->>Service: success/failure
-            Service->>DB: record sent/failed outcome
+            Service->>DB: record failed (unknown_region)
+        else routable
+            Service->>Slack: POST alert (with retries)
+            Slack-->>Service: ok / failure
+            Service->>DB: record sent / failed
         end
     end
     Service->>Support: aggregated unknown-region notification
-    Service->>DB: complete_run(status=succeeded, counts)
+    Service->>DB: complete_run (status=succeeded, counts)
     Service-->>API: run_id
-    API-->>Client: run_id
+    API-->>Client: { run_id }
 ```
 
 ## Tests
-
-Run all tests:
 
 ```bash
 pytest
 ```
 
-Run specific tests:
-
-```bash
-pytest tests/test_risk_logic.py -v
-pytest tests/test_slack.py -v
-pytest tests/test_db.py -v
-pytest tests/test_run_service.py -v
-```
+Covers configuration, persistence/replay (sent preserved, failed retried),
+risk logic (duration, dedup, ARR threshold, unknown region), run orchestration
+(dry run, unknown region + support, send, failure-but-run-succeeds, replay skip),
+and Slack payload/URL formatting.
 
 ## Docker
 
-Build:
-
 ```bash
 docker build -t risk-alert-service .
-```
 
-Run:
-
-```bash
 docker run --rm -p 8000:8000 \
   -e ARR_THRESHOLD=25000 \
   -e SQLITE_DB_PATH=/tmp/risk_alerts.db \
   -e SLACK_WEBHOOK_BASE_URL=http://host.docker.internal:9000/slack/webhook \
   risk-alert-service
-```
 
-Then call:
-
-```bash
 curl http://localhost:8000/health
 ```
-
-## Design notes
-
-### Why `running -> succeeded/failed` run lifecycle?
-
-A run row is inserted before alert processing starts. This lets alert outcomes reference the run via foreign key and leaves a persisted failed run if a fatal error occurs.
-
-Per-alert Slack failures do not fail the whole run. They are recorded as failed deliveries.
-
-Fatal processing errors, such as unreadable Parquet or invalid schema, mark the run as failed and surface an API error.
-
-### Why not record dry-run outcomes?
-
-Dry runs should not affect replay safety. A dry run computes alerts but does not insert sent outcomes because that could make a later real run incorrectly skip slack delivery.
