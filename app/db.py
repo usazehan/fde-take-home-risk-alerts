@@ -59,7 +59,7 @@ runs = Table(
     Column("run_id", String, primary_key=True),
     Column("source_uri", String, nullable=False),
     Column("month", Date, nullable=False),
-    Column("dry_run", Integer, nullable=False, default=0),  # SQLite has no bool
+    Column("dry_run", Integer, nullable=False, default=0),  
     Column("status", String, nullable=False),               # running | succeeded | failed
     Column("rows_scanned", Integer, nullable=False, default=0),
     Column("alerts_sent", Integer, nullable=False, default=0),
@@ -110,7 +110,7 @@ def make_engine(db_path: str) -> Engine:
     return engine
 
 
-# ---- runs ----------------------------------------------------------------
+# ---- runs 
 
 
 def create_run(
@@ -156,7 +156,7 @@ def complete_run(
             raise ValueError(f"Run not found: {run_id}")
 
 
-# ---- alert outcomes ------------------------------------------------------
+# ---- alert outcomes 
 
 
 def get_existing_outcome(
@@ -251,7 +251,7 @@ def record_alert_outcome(
         conn.execute(stmt)
 
 
-# ---- GET /runs/{run_id} --------------------------------------------------
+# ---- GET /runs/{run_id} 
 
 
 def get_run_result(
@@ -318,7 +318,7 @@ def get_run_result(
     )
 
 
-# ---- helpers -------------------------------------------------------------
+# ---- helpers 
 
 
 def _row_to_outcome(row) -> AlertOutcome:

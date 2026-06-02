@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fastapi import HTTPException
+from sqlalchemy.engine import Engine
+
 
 from .config import get_config
 from .db import (
@@ -33,7 +35,7 @@ from .support import send_support_notification
 
 @dataclass(frozen=True)
 class RunService:
-    db_path: str
+    engine: Engine
 
     def create_run(self, request: RunRequest) -> RunResponse:
         """
@@ -49,10 +51,9 @@ class RunService:
         This keeps dry_run side-effect free with respect to the delivery ledger.
         """
         config = get_config()
-        engine = make_engine(self.db_path)
 
         run_id = create_run(
-            engine,
+            self.engine,
             source_uri=request.source_uri,
             month=request.month,
             dry_run=request.dry_run,
@@ -72,7 +73,7 @@ class RunService:
 
             if request.dry_run:
                 complete_run(
-                    engine,
+                    self.engine,
                     run_id=run_id,
                     status="succeeded",
                     counts=counts,
@@ -82,7 +83,7 @@ class RunService:
             unknown_region_alerts = []
 
             for alert in result.alerts:
-                if was_already_sent(engine, alert):
+                if was_already_sent(self.engine, alert):
                     counts.skipped_replay += 1
                     continue
 
@@ -91,7 +92,7 @@ class RunService:
                     unknown_region_alerts.append(alert)
 
                     record_alert_outcome(
-                        engine,
+                        self.engine,
                         run_id=run_id,
                         alert=alert,
                         status="failed",
@@ -104,7 +105,7 @@ class RunService:
                 except SlackConfigError as exc:
                     counts.failed_deliveries += 1
                     record_alert_outcome(
-                        engine,
+                        self.engine,
                         run_id=run_id,
                         alert=alert,
                         status="failed",
@@ -115,7 +116,7 @@ class RunService:
                 if delivery.ok:
                     counts.alerts_sent += 1
                     record_alert_outcome(
-                        engine,
+                        self.engine,
                         run_id=run_id,
                         alert=alert,
                         status="sent",
@@ -123,7 +124,7 @@ class RunService:
                 else:
                     counts.failed_deliveries += 1
                     record_alert_outcome(
-                        engine,
+                        self.engine,
                         run_id=run_id,
                         alert=alert,
                         status="failed",
@@ -134,7 +135,7 @@ class RunService:
                 send_support_notification(unknown_region_alerts)
 
             complete_run(
-                engine,
+                self.engine,
                 run_id=run_id,
                 status="succeeded",
                 counts=counts,
@@ -144,7 +145,7 @@ class RunService:
 
         except Exception:
             complete_run(
-                engine,
+                self.engine,
                 run_id=run_id,
                 status="failed",
                 counts=counts,
@@ -152,8 +153,7 @@ class RunService:
             raise
 
     def get_run(self, run_id: str) -> RunResultResponse:
-        engine = make_engine(self.db_path)
-        result = get_run_result(engine, run_id)
+        result = get_run_result(self.engine, run_id)
 
         if result is None:
             raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
