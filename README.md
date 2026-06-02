@@ -247,7 +247,7 @@ Parquet is read through the PyArrow Dataset API with column projection and a row
 filter pushed down to the scan — only `month <= target_month` and only the columns
 needed for alert computation are materialized, so the full file is never loaded
 into memory unnecessarily. Local (`file://`) and GCS (`gs://`) sources are
-supported.
+supported; s3:// is recognized but not implemented
 
 GCS uses ambient Google credentials (Application Default Credentials):
 
