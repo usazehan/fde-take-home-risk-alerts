@@ -3,14 +3,14 @@
 A FastAPI service that reads monthly account-status Parquet data, finds accounts
 that are currently **At Risk**, computes how long each has been continuously at
 risk, and posts region-routed alerts to Slack. Runs are persisted in SQLite so
-re-running the same month is idempotent (no duplicate alerts).
+re-running the same month is idempotent.
 
 ## Endpoints
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Health check |
-| `POST` | `/preview` | Compute alerts for a month;no Slack, no persistence |
+| `POST` | `/preview` | Compute alerts for a month; no Slack, no persistence |
 | `POST` | `/runs` | Execute a run synchronously, send Slack, persist outcomes, return a `run_id` |
 | `GET` | `/runs/{run_id}` | Persisted run status, counts, and sample alerts/errors |
 
@@ -21,8 +21,8 @@ app/
   main.py          FastAPI routes and startup/shutdown
   config.py        Env configuration
   models.py        API/domain models
-  storage.py       Parquet access (file:// and gs://)
-  risk_logic.py    Dedup, ARR filtering, continuous-at-risk duration
+  storage.py       Parquet access 
+  risk_logic.py    Dedup, ARR filtering, at-risk duration
   db.py            SQLite persistence + replay safety
   slack.py         Slack payload formatting + delivery with retries and backoffs
   support.py       Aggregated notification stub
@@ -59,7 +59,7 @@ mock Slack server, set the base URL so alerts route per channel:
 export SLACK_WEBHOOK_BASE_URL=http://localhost:9000/slack/webhook
 ```
 
-Alerts then post to `…/amer-risk-alerts`, `…/emea-risk-alerts`, `…/apac-risk-alerts`.
+Alerts then post to `amer-risk-alerts`, `emea-risk-alerts`, `apac-risk-alerts`.
 
 The support-notification recipient (`support@quadsci.ai`) is defined in
 `app/support.py`; it is not currently an environment variable.
@@ -70,13 +70,12 @@ The threshold is applied **only when ARR is present**. A missing ARR (`null`) is
 treated as unknown, so accounts with incomplete data are not
 silently dropped:
 
-- `arr = 50000` → included (≥ 25000)
-- `arr = 10000` → filtered out (< 25000)
-- `arr = null` → included
+- `arr = 50000` -> included (≥ 25000)
+- `arr = 10000` -> filtered out (< 25000)
+- `arr = null` -> included
 
-The default of `25000` was chosen against the provided dataset: the maximum ARR
-in the data is just under `100000`. `25000` surfaces a meaningful set of
-at-risk accounts while still filtering the lowest-value ones.
+The default of `25000` was chosen against the provided dataset; the maximum ARR
+in the data is just under `100000`
 
 ### Region routing
 
@@ -108,7 +107,7 @@ curl http://localhost:8000/health
 # {"ok": true}
 ```
 
-### Preview (no Slack, no persistence)
+### Preview
 
 ```bash
 PARQUET="file://$(pwd)/monthly_account_status.parquet"
@@ -150,6 +149,7 @@ PARQUET="file://$(pwd)/monthly_account_status.parquet"
 curl -X POST http://localhost:8000/runs \
   -H "Content-Type: application/json" \
   -d "{\"source_uri\": \"$PARQUET\", \"month\": \"2026-01-01\", \"dry_run\": false}"
+
 # {"run_id": "3df0a8d6-5c1f-4e2e-bf25-8d6c7f0e3f41"}
 ```
 
