@@ -6,20 +6,18 @@ Two tables:
     - one row per run
     - two-phase lifecycle (running -> succeeded/failed)
   alert_outcomes  
-    - durable cross-run per-alert ledger
+    - cross-run alert ledger
     - UNIQUE(account_id, month, alert_type) which enforces replay safety
 
 Replay safety:
-    - If an alert was already sent, callers should skip Slack and increment
-    skipped_replay in RunCounts.
-    - record_alert_outcome() also protects previously sent rows at the DB layer.
-    - Previously failed outcomes can be retried and overwritten.
+    - Previously sent alerts are preserved and skipped on replay
+    - Previously failed outcomes can be retried and overwritten
 
 Lifecycle:
-  create_run inserts a 'running' row first (so alert_outcomes.run_id can FK to it),
-  outcomes are recorded during the run, then complete_run sets the final status and
-  counts. alert_json stores the computed RiskAlert so GET /runs/{id} can rehydrate
-  the full alert for sample_alerts without re-scanning the parquet.
+    - create_run() inserts a running row first so alert_outcomes can reference it
+    - complete_run() writes the final status and counts after processing
+
+alert_json stores the computed RiskAlert so GET /runs/{id} can return sample alerts without re-reading the Parquet source
 """
 
 from __future__ import annotations

@@ -8,10 +8,8 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 
-
 class StorageError(Exception):
     """Raised when a source_uri cannot be resolved or scanned."""
-
 
 @dataclass(frozen=True)
 class ParquetSource:
@@ -20,10 +18,9 @@ class ParquetSource:
     path: str
     filesystem: pafs.FileSystem
 
-
 def open_uri(source_uri: str) -> ds.Dataset:
     """
-    Open a source_uri as a lazy PyArrow Parquet Dataset.
+    Open a source_uri as a lazy PyArrow parquet dataset.
 
     Supported:
       - file://... or bare local path
@@ -32,8 +29,6 @@ def open_uri(source_uri: str) -> ds.Dataset:
     Recognized but not implemented:
       - s3://bucket/path/file.parquet
 
-    The returned Dataset is lazy. Callers should apply column projection and
-    filter expressions when scanning to avoid materializing unnecessary data.
     """
     source = _resolve_source(source_uri)
 
@@ -54,7 +49,7 @@ def read_table(
     filter_expression: ds.Expression | None = None,
 ) -> pa.Table:
     """
-    Scan a Parquet source into an Arrow table using projection and filtering.
+    Scan a parquet source into an Arrow table using projection and filtering.
 
     This is the main entry point risk_logic.py should use.
 
@@ -115,7 +110,6 @@ def _resolve_local_source(source_uri: str, parsed) -> ParquetSource:
         path=str(file_path),
         filesystem=pafs.LocalFileSystem(),
     )
-
 
 def _resolve_gcs_source(source_uri: str, parsed) -> ParquetSource:
     bucket_name = parsed.netloc

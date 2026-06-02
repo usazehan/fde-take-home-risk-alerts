@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from fastapi import HTTPException
 from sqlalchemy.engine import Engine
 
-
 from .config import get_config
 from .db import (
     complete_run,

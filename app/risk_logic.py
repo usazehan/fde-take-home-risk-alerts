@@ -12,7 +12,7 @@ from .storage import read_table
 
 AT_RISK = "At Risk"
 
-# Columns the logic needs; projecting to these keeps the scan narrow.
+# Columns the logic needs from the source dataset
 _COLUMNS = [
     "account_id",
     "account_name",
@@ -38,11 +38,10 @@ def compute_alerts(
     target_month: date,
     config: AppConfig,
 ) -> ComputeResult:
-    """Compute At Risk alerts for the target month."""
+    """Compute at risk alerts for the target month"""
     if target_month.day != 1:
         raise ValueError("target_month must be the first day of the month")
 
-    # Filtered scan: only target month and earlier, only needed columns.
     table = read_table(
         source_uri,
         columns=_COLUMNS,
@@ -51,10 +50,8 @@ def compute_alerts(
     rows: list[dict[str, Any]] = table.to_pylist()
     rows_scanned = len(rows)
 
-    # Dedupe (account_id, month) -> latest updated_at.
     latest, duplicate_rows = _dedupe_latest(rows)
 
-    # Index status history per account for backward duration walk.
     status_by_account: dict[str, dict[date, str]] = {}
     for (account_id, month), row in latest.items():
         status_by_account.setdefault(account_id, {})[month] = row.get("status")
@@ -108,9 +105,9 @@ def compute_alerts(
 
 def _dedupe_latest(rows: list[dict[str, Any]]) -> tuple[dict[tuple[str, date], dict[str, Any]], int]:
     """
-    Collapse duplicate (account_id, month) rows, keeping the latest updated_at.
+    Collapse duplicate (account_id, month) rows, keeping the latest updated_at
 
-    duplicate_rows is the number of rows dropped as duplicates.
+    duplicate_rows is the number of rows dropped as duplicates
     """
     latest: dict[tuple[str, date], dict[str, Any]] = {}
     duplicates = 0
@@ -142,9 +139,9 @@ def _duration_and_start(
     status_by_month: dict[date, str],
 ) -> tuple[int, date]:
     """
-    Count consecutive At Risk months ending at target_month.
+    Count consecutive at risk months ending at target_month.
 
-    Stops when the previous calendar month is missing or no longer At Risk.
+    Stops when the previous calendar month is missing or no longer at risk
     """
     duration = 1
     start = target_month

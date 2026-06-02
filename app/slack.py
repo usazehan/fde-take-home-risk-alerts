@@ -9,7 +9,7 @@ Responsibilities:
   - POST it, retrying transient failures (HTTP 429 and 5xx) with exponential backoff,
     honouring Retry-After when present.
   - Return a result (sent/failed + error) so the run can complete even when some
-    sends fail. Delivery failures are returned.
+    sends fail. Also, delivery failures are returned.
 """
 
 from __future__ import annotations
@@ -56,9 +56,7 @@ def send_alert(
 ) -> SlackDeliveryResult:
     """Send one RiskAlert to its channel, retrying transient failures.
 
-    Returns SlackDeliveryResult(ok=True) on a 2xx, or (ok=False, error=...) after
-    exhausting retries or on a non-retryable status. Never raises on delivery failure
-    so one bad send doesn't abort a run. `sleep` is injectable for tests.
+    Returns SlackDeliveryResult(ok=True) on a 2xx, or (ok=False, error=...) after using up retries 
     """
     if not alert.channel:
         # Defensive: unknown_region alerts shouldn't reach here.
@@ -103,8 +101,8 @@ def send_alert(
 def build_webhook_url(channel: str, config: AppConfig) -> str:
     """Build the POST URL. SLACK_WEBHOOK_BASE_URL takes precedence; then SLACK_WEBHOOK_URL.
 
-    Base-URL mode posts to {SLACK_WEBHOOK_BASE_URL}/{channel} (matches the mock server's
-    /slack/webhook/{channel}). Single-webhook mode posts to SLACK_WEBHOOK_URL.
+    Base-URL mode posts to {SLACK_WEBHOOK_BASE_URL}/{channel}
+    Single-webhook mode posts to SLACK_WEBHOOK_URL
     """
     if config.slack_webhook_base_url:
         return f"{config.slack_webhook_base_url.rstrip('/')}/{channel}"
@@ -116,11 +114,7 @@ def build_webhook_url(channel: str, config: AppConfig) -> str:
 
 
 def build_slack_payload(alert: RiskAlert) -> dict[str, Any]:
-    """Build the Slack JSON payload.
-
-    `text` is the human-readable message (spec format). The structured fields are
-    included too — harmless for real webhooks and useful for inspecting the mock's logs.
-    """
+    """Build the Slack JSON payload"""
     parts = [
         f"🚩 At Risk: {alert.account_name} ({alert.account_id})",
         f"Region: {_display(alert.account_region)}",
@@ -150,7 +144,7 @@ def build_slack_payload(alert: RiskAlert) -> dict[str, Any]:
 
 
 def _backoff(attempt: int, base: float, retry_after: Optional[str]) -> float:
-    """Delay before next attempt: honour Retry-After (seconds) if present, else base * 2**attempt."""
+    """Delay before next attempt: honour Retry-After if present, else base * 2**attempt"""
     if retry_after:
         try:
             value = float(retry_after)
