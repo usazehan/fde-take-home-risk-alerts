@@ -67,7 +67,7 @@ The support-notification recipient (`support@quadsci.ai`) is defined in
 ### ARR threshold behavior
 
 The threshold is applied **only when ARR is present**. A missing ARR (`null`) is
-treated as unknown, not as low ARR, so accounts with incomplete data are not
+treated as unknown, so accounts with incomplete data are not
 silently dropped:
 
 - `arr = 50000` → included (≥ 25000)
@@ -75,8 +75,7 @@ silently dropped:
 - `arr = null` → included
 
 The default of `25000` was chosen against the provided dataset: the maximum ARR
-in the data is just under `100000`, so the original placeholder default of
-`100000` would have produced zero alerts. `25000` surfaces a meaningful set of
+in the data is just under `100000`. `25000` surfaces a meaningful set of
 at-risk accounts while still filtering the lowest-value ones.
 
 ### Region routing
@@ -90,8 +89,8 @@ at-risk accounts while still filtering the lowest-value ones.
 If `account_region` is missing or unknown, the account is **not** sent to Slack.
 Instead the outcome is recorded as `failed` with error `unknown_region`, and the
 account is included in a single aggregated support notification at the end of the
-run. For this exercise `support.py` logs that notification; in production the same
-function would send via SES, SMTP, or an internal notification service.
+run. For this application `support.py` logs that notification; in production the same
+function would send using SES, SMTP, or an internal notification service.
 
 ## Running locally
 
@@ -101,9 +100,6 @@ Start the mock Slack server (see `mock_slack/`), then:
 export SLACK_WEBHOOK_BASE_URL=http://localhost:9000/slack/webhook
 uvicorn app.main:app --reload --port 8000
 ```
-
-The engine and tables are created once at startup (idempotent `CREATE TABLE IF
-NOT EXISTS`), and the connection pool is disposed on shutdown.
 
 ### Health
 
@@ -217,19 +213,17 @@ returns `skipped_replay: 107` and sends nothing.
 
 ## Replay safety
 
-`alert_outcomes` enforces uniqueness on `(account_id, month, alert_type)` (current
-alert type is `at_risk`). On a re-run:
+`alert_outcomes` enforces uniqueness on `(account_id, month, alert_type)`. On a re-run:
 
-- **Already sent** → Slack is not called again, `skipped_replay` is incremented, and
-  the original `sent` row is preserved (the upsert refuses to overwrite a `sent` row).
-- **Previously failed** → the alert is retried, and the row can be overwritten by a
+- **Already sent** -> Slack is not called again, `skipped_replay` is incremented, and
+  the original `sent` row is preserved.
+- **Previously failed** -> the alert is retried, and the row can be overwritten by a
   later `sent` or `failed` outcome.
 - **No prior outcome** → a new outcome is inserted.
 
-The run lifecycle is two-phase: a `running` row is inserted first (so outcomes can
-reference it via foreign key), then the run is marked `succeeded` or `failed` with
+The run lifecycle is two-phase: a `running` row is inserted first, then the run is marked `succeeded` or `failed` with
 final counts. A per-alert Slack failure is recorded as a failed delivery and does
-**not** fail the run; only an unprocessable run (e.g. unreadable Parquet) is marked
+**not** fail the run; only an unprocessable run like a unreadable Parquet is marked
 `failed` and surfaced as an API error.
 
 ## Slack alert format
