@@ -1,9 +1,6 @@
 # Monthly Account Risk Alerts
 
-A FastAPI service that reads monthly account-status Parquet data, finds accounts
-that are currently **At Risk**, computes how long each has been continuously at
-risk, and posts region-routed alerts to Slack. Runs are persisted in SQLite so
-re-running the same month is idempotent.
+This is a FastAPI batch service for monthly account risk alerts. It reads account-status history from Parquet, finds accounts that are currently At Risk, computes how long they have been continuously at risk, and sends routed Slack alerts.
 
 ## Endpoints
 
@@ -66,16 +63,15 @@ The support-notification recipient (`support@quadsci.ai`) is defined in
 
 ### ARR threshold behavior
 
-The threshold is applied **only when ARR is present**. A missing ARR (`null`) is
-treated as unknown, so accounts with incomplete data are not
-silently dropped:
+ARR_THRESHOLD is applied only when ARR is present. If ARR is missing, the account is treated as incomplete/unknown rather than low-value, so it remains eligible for alerting.
+
+Examples with the default threshold of 25000:
 
 - `arr = 50000` -> included (≥ 25000)
 - `arr = 10000` -> filtered out (< 25000)
 - `arr = null` -> included
 
-The default of `25000` was chosen against the provided dataset; the maximum ARR
-in the data is just under `100000`
+The default threshold keeps the sample run from alerting on very low-ARR accounts while still surfacing accounts with missing ARR for review.
 
 ### Region routing
 
@@ -85,10 +81,11 @@ in the data is just under `100000`
 | `EMEA` | `emea-risk-alerts` |
 | `APAC` | `apac-risk-alerts` |
 
-If `account_region` is missing or unknown, the account is **not** sent to Slack.
+If `account_region` is missing or unknown, the account is not sent to Slack.
 Instead the outcome is recorded as `failed` with error `unknown_region`, and the
-account is included in a single aggregated support notification at the end of the
-run. For this application `support.py` logs that notification; in production the same
+account is included in a notification at the end of the run. 
+
+For this application `support.py` logs that notification; in production the same
 function would send using SES, SMTP, or an internal notification service.
 
 ## Running locally
@@ -153,8 +150,7 @@ curl -X POST http://localhost:8000/runs \
 # {"run_id": "3df0a8d6-5c1f-4e2e-bf25-8d6c7f0e3f41"}
 ```
 
-A dry run (`"dry_run": true`) computes alerts and records a run row, but sends no
-Slack and writes no `sent` outcomes — so it never affects replay safety.
+A dry run computes alerts and records a run row, but sends no Slack and writes no `sent` outcomes.
 
 ### Get a run result
 
@@ -208,23 +204,20 @@ Example response (samples truncated):
 ```
 
 The `110` total alerts for `2026-01-01` split into `107` routable (sent) and `3`
-unknown-region (recorded `failed`, reported to support). Re-running the same month
-returns `skipped_replay: 107` and sends nothing.
+unknown-region. Rerunning the same month returns `skipped_replay: 107` and sends nothing.
 
 ## Replay safety
 
-`alert_outcomes` enforces uniqueness on `(account_id, month, alert_type)`. On a re-run:
+`alert_outcomes` enforces uniqueness on `(account_id, month, alert_type)`. On a rerun:
 
 - **Already sent** -> Slack is not called again, `skipped_replay` is incremented, and
   the original `sent` row is preserved.
 - **Previously failed** -> the alert is retried, and the row can be overwritten by a
   later `sent` or `failed` outcome.
-- **No prior outcome** → a new outcome is inserted.
+- **No prior outcome** -> a new outcome is inserted.
 
 The run lifecycle is two-phase: a `running` row is inserted first, then the run is marked `succeeded` or `failed` with
-final counts. A per-alert Slack failure is recorded as a failed delivery and does
-**not** fail the run; only an unprocessable run like a unreadable Parquet is marked
-`failed` and surfaced as an API error.
+final counts. A Slack failure is recorded as a failed delivery and does **not** fail the run; only an unprocessable run like a unreadable Parquet is marked `failed` and surfaced as an API error.
 
 ## Slack alert format
 
@@ -243,11 +236,8 @@ Delivery retries on HTTP `429` and `5xx` with exponential backoff, honoring the
 
 ## Storage and scale
 
-Parquet is read through the PyArrow Dataset API with column projection and a row
-filter pushed down to the scan — only `month <= target_month` and only the columns
-needed for alert computation are materialized, so the full file is never loaded
-into memory unnecessarily. Local (`file://`) and GCS (`gs://`) sources are
-supported; s3:// is recognized but not implemented
+Parquet is read using the PyArrow with columns and filtered scans before converting results to objects.
+Local (`file://`) and GCS (`gs://`) are supported; `s3://` is recognized but not implemented
 
 GCS uses ambient Google credentials (Application Default Credentials):
 
@@ -266,13 +256,10 @@ Credentials are never placed in `source_uri`.
 ## Tests
 
 ```bash
-pytest
+pytest -v
 ```
 
-Covers configuration, persistence/replay (sent preserved, failed retried),
-risk logic (duration, dedup, ARR threshold, unknown region), run orchestration
-(dry run, unknown region + support, send, failure-but-run-succeeds, replay skip),
-and Slack payload/URL formatting.
+Covers configuration, persistence/replay, risk logic , run orchestration, and Slack payload/URL formatting.
 
 ## Docker
 
